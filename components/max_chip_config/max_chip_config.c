@@ -6,7 +6,7 @@
 #define BAUD_RATE 0
 #define TRANSACTION_BITS_NO 0
 #define RX_TIMEOUT 0
-#define BYTES_FOR_RXFIFO 0
+#define BYTES_FOR_RXFIFO 6
 #define BYTES_FOR_TXFIFO 0
 #define MAX_NO_OF_ERROR_EVENTS 0
 #define UART_CHANNEL UART_NUM_1
@@ -36,8 +36,35 @@
 
 
 void max3485_init();
+void read_from_uart_rx_fifo(RS485_Packet* packet);
+void push_to_uart_tx_fifo(RS485_Packet* packet);
+void flush_uart_rx_fifo();
+RS485_Packet data_packet_from_rx = {0};
+RS485_Packet data_packet_to_tx = {0};
 QueueHandle_t uart_event_queue = NULL;
 
+void flush_uart_rx_fifo() {
+    esp_err_t result;
+    result = uart_flush_input(UART_CHANNEL);
+    if (result != ESP_OK) {
+        printf("Couldn't clear RX FIFO! Error: %s",esp_err_to_name(result));
+        fflush(stdout);
+        return;
+    }
+}
+void read_from_uart_rx_fifo(RS485_Packet* packet) {
+    uart_read_bytes(UART_CHANNEL,(void *) packet, BYTES_FOR_RXFIFO,portMAX_DELAY);
+}
+void push_to_uart_tx_fifo(RS485_Packet* packet) {
+    uart_write_bytes(UART_CHANNEL,(void *)packet,sizeof(RS485_Packet));
+    esp_err_t result;
+    result = uart_wait_tx_done(UART_CHANNEL,portMAX_DELAY);
+    if (result !=ESP_OK) {
+        printf("Couldn't transmit bytes! Error: %s",esp_err_to_name(result));
+        fflush(stdout);
+        return;
+    }
+}
 void max3485_init() {
     uart_config_t max3485_config = {
         .baud_rate=BAUD_RATE,
