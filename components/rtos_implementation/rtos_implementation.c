@@ -14,6 +14,7 @@ static RS485_Packet to_hold_recently_sent_packet={0};
 
 void vTaskRS485(void *pvParameters);
 void vTaskActuator(void *pvParameters);
+void vTaskDisplay(void *pvParameters);
 
 void vTaskRS485(void *pvParameters) {
     if (!queue_for_actual_data) {
@@ -111,7 +112,7 @@ void vTaskActuator(void *pvParameters) {
                         xSemaphoreGive(xMutex);
                     }
                     xSemaphoreTake(xBinarySemaphore,portMAX_DELAY);
-                    vTaskDelayUntil(portMAX_DELAY,portMAX_DELAY);
+                    vTaskDelayUntil(0,portMAX_DELAY);
                     xSemaphoreTake(xMutex,portMAX_DELAY);
                         data_packet_to_tx.byte_0.full_8_bits=0b00000001;
                         data_packet_to_tx.byte_1=0xFF;
@@ -165,5 +166,13 @@ void vTaskActuator(void *pvParameters) {
             default:
                 break;
         }
+    }
+}
+void vTaskDisplay(void *pvParameters) {
+    uint8_t struct_key;
+    for (;;) {
+        xQueueReceive(queue_for_display_data,&struct_key,portMAX_DELAY);
+        to_hand_control_to_oled(lookup_table[struct_key]);
+        xSemaphoreGive(xBinarySemaphore);
     }
 }

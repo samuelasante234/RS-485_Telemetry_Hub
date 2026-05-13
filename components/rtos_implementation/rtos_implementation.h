@@ -21,3 +21,4 @@ extern SemaphoreHandle_t xBinarySemaphore;
 
 void vTaskRS485(void *pvParameters);
 void vTaskActuator(void *pvParameters);
+void vTaskDisplay(void *pvParameters);
