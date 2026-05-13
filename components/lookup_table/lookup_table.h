@@ -2,14 +2,15 @@
 #include <string.h>
 #include <stdbool.h>
 
-StructForDisplay* lookup_table[256];
 
 typedef struct {
     char* message;
     void (*function)(char*);
     bool is_long;
 } StructForDisplay;
+StructForDisplay* lookup_table[256];
 void struct_for_display_init();
+void to_hand_control_to_oled(StructForDisplay* chosen_struct);
 
 
 extern StructForDisplay struct_for_display_1;
