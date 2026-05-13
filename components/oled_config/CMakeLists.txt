@@ -1,5 +1,5 @@
 idf_component_register(
     SRCS "oled_config.c"
     INCLUDE_DIRS "."
-    REQUIRES driver
+    REQUIRES driver oled_font
 )
