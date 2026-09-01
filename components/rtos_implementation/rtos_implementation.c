@@ -8,9 +8,19 @@
 #include "lookup_table.h"
 #include "freertos/semphr.h"
 
+#define STATE_NEW_MESSAGE_NOT_CORRUPTED                                     (0b000)
+#define STATE_PREVIOUS_MESSAGE_NOT_CORRUPTED                                (0b001)
+#define STATE_NEW_MESSAGE_CORRUPTED_BY_RECEIVER_ONLY                        (0b010)
+#define STATE_PREVIOUS_MESSAGE_CORRUPTED_BY_RECEIVER_ONLY                   (0b011)
+#define STATE_NEW_MESSAGE_CORRUPTED_BY_SENDER_ONLY                          (0b100)
+#define STATE_PREVIOUS_MESSAGE_CORRUPTED_BY_SENDER_ONLY                     (0b101)
+#define STATE_NEW_MESSAGE_CORRUPTED_BY_SENDER_CORRUPTED_BY_RECEIVER         (0b110)
+#define STATE_PREVIOUS_MESSAGE_CORRUPTED_BY_SENDER_CORRUPTED_BY_RECEIVER    (0b111)
+
 static QueueHandle_t queue_for_actual_data =NULL;
 static QueueHandle_t queue_for_display_data=NULL;
 static RS485_Packet to_hold_recently_sent_packet={0};
+
 
 void vTaskRS485(void *pvParameters);
 void vTaskActuator(void *pvParameters);
@@ -31,9 +41,9 @@ void vTaskRS485(void *pvParameters) {
         if ((struct_receive.type == UART_DATA) && struct_receive.size != 6) {
             flush_uart_rx_fifo();
             xSemaphoreTake(xMutex,portMAX_DELAY);
-            data_packet_to_tx.byte_0.full_8_bits=0x00;
-            data_packet_to_tx.byte_1=0xFF;
-            data_packet_to_tx.byte_2_5=crc32(data_packet_to_tx.byte_1);
+            data_packet_to_tx.check_info.check_info_full=0x00;
+            data_packet_to_tx.data=0xFF;
+            data_packet_to_tx.checksum=crc32(data_packet_to_tx.data<<8 | data_packet_to_tx.check_info.check_info_full);
             to_hold_recently_sent_packet=data_packet_to_tx;
             push_to_uart_tx_fifo(&data_packet_to_tx);
             xSemaphoreGive(xMutex);
@@ -46,21 +56,21 @@ void vTaskRS485(void *pvParameters) {
         if (struct_receive.type == UART_FIFO_OVF || struct_receive.type == UART_FRAME_ERR) {
             flush_uart_rx_fifo();
             xSemaphoreTake(xMutex,portMAX_DELAY);
-            data_packet_to_tx.byte_0.full_8_bits=0x00;
-            data_packet_to_tx.byte_1=0xFF;
-            data_packet_to_tx.byte_2_5=crc32(data_packet_to_tx.byte_1);
+            data_packet_to_tx.check_info.check_info_full=0x00;
+            data_packet_to_tx.data=0xFF;
+            data_packet_to_tx.checksum=crc32(data_packet_to_tx.data<<8 | data_packet_to_tx.check_info.check_info_full);
             to_hold_recently_sent_packet=data_packet_to_tx;
             push_to_uart_tx_fifo(&data_packet_to_tx);
             xSemaphoreGive(xMutex);
             continue;
         }
-        read_from_uart_rx_fifo(&data_packet_from_rx);
-        if (!is_crc_passed(data_packet_from_rx.byte_1,data_packet_from_rx.byte_2_5))
-            data_packet_from_rx.byte_0.bit1=1;
+        read_from_uart_rx_fifo(&data_packet_from_rx); 
         ExtractedDataStruct extracted_struct_data ={
-            .byte_0_extracted.full_bits=data_packet_from_rx.byte_0.full_8_bits,
-            .byte1=data_packet_from_rx.byte_1,
+            .check_info.check_info_full=data_packet_from_rx.check_info.check_info_full,
+            .data=data_packet_from_rx.data,
         };
+        if (!is_crc_passed(data_packet_from_rx.data<<8 | data_packet_from_rx.check_info.check_info_full, data_packet_from_rx.checksum))
+            extracted_struct_data.check_info.is_corrupted_by_sender=1;
         portBASE_TYPE send_status;
         if ((send_status = xQueueSend(queue_for_actual_data,&extracted_struct_data,portMAX_DELAY)) !=pdPASS) {
             printf("Could not send to extracted queue!");
@@ -74,21 +84,21 @@ void vTaskActuator(void *pvParameters) {
     for (;;) {
         xQueueReceive(queue_for_actual_data,&extracted_struct_data,portMAX_DELAY);
         uint8_t comb_of_lsb_3;
-        comb_of_lsb_3=(extracted_struct_data.byte_0_extracted.bit0) |((extracted_struct_data.byte_0_extracted.bit1)<<1)|((extracted_struct_data.byte_0_extracted.bit2)<<2);
+        comb_of_lsb_3=(extracted_struct_data.check_info.is_message_previous) |((extracted_struct_data.check_info.is_corrupted_by_receiver)<<1)|((extracted_struct_data.check_info.is_corrupted_by_sender)<<2);
         switch (comb_of_lsb_3) {
-            case 0b00000000:
-                if (lookup_table[extracted_struct_data.byte1]==NULL) {
+            case STATE_NEW_MESSAGE_NOT_CORRUPTED:
+                if (lookup_table[extracted_struct_data.data]==NULL) {
                     xSemaphoreTake(xMutex,portMAX_DELAY);
-                    data_packet_to_tx.byte_0.full_8_bits=0b0001001;
-                    data_packet_to_tx.byte_1=0xFF;
-                    data_packet_to_tx.byte_2_5=crc32(data_packet_to_tx.byte_1);
+                    data_packet_to_tx.check_info.check_info_full=0b00001001;
+                    data_packet_to_tx.data=0xFF;
+                    data_packet_to_tx.checksum=crc32(data_packet_to_tx.data<<8 | data_packet_to_tx.check_info.check_info_full);
                     to_hold_recently_sent_packet=data_packet_to_tx;
                     push_to_uart_tx_fifo(&data_packet_to_tx);
                     xSemaphoreGive(xMutex);
                 }
                 else {
                     if (!queue_for_display_data) {
-                        queue_for_display_data=xQueueCreate(0,sizeof(extracted_struct_data.byte1));
+                        queue_for_display_data=xQueueCreate(0,sizeof(extracted_struct_data.data));
                         if (!queue_for_display_data) {
                             printf("Couldn't create queue for display data!");
                             fflush(stdout);
@@ -96,17 +106,17 @@ void vTaskActuator(void *pvParameters) {
                         }
                     }
                     portBASE_TYPE send_status;
-                    if ((send_status = xQueueSend(queue_for_display_data,&extracted_struct_data.byte1,portMAX_DELAY)) !=pdPASS) {
+                    if ((send_status = xQueueSend(queue_for_display_data,&extracted_struct_data.data,portMAX_DELAY)) !=pdPASS) {
                         printf("Could not send to display queue!");
                         fflush(stdout);
                         esp_restart();
                     }
-                    StructForDisplay *temp = lookup_table[extracted_struct_data.byte1];
+                    StructForDisplay *temp = lookup_table[extracted_struct_data.data];
                     if (temp->is_long) {
                         xSemaphoreTake(xMutex,portMAX_DELAY);
-                        data_packet_to_tx.byte_0.full_8_bits=0b0010001;
-                        data_packet_to_tx.byte_1=0xFF;
-                        data_packet_to_tx.byte_2_5=crc32(data_packet_to_tx.byte_1);
+                        data_packet_to_tx.check_info.check_info_full=0b00010001;
+                        data_packet_to_tx.data=0xFF;
+                        data_packet_to_tx.checksum=crc32(data_packet_to_tx.data<<8 | data_packet_to_tx.check_info.check_info_full);
                         to_hold_recently_sent_packet=data_packet_to_tx;
                         push_to_uart_tx_fifo(&data_packet_to_tx);
                         xSemaphoreGive(xMutex);
@@ -114,52 +124,52 @@ void vTaskActuator(void *pvParameters) {
                     xSemaphoreTake(xBinarySemaphore,portMAX_DELAY);
                     vTaskDelayUntil(0,portMAX_DELAY);
                     xSemaphoreTake(xMutex,portMAX_DELAY);
-                        data_packet_to_tx.byte_0.full_8_bits=0b00000001;
-                        data_packet_to_tx.byte_1=0xFF;
-                        data_packet_to_tx.byte_2_5=crc32(data_packet_to_tx.byte_1);
+                        data_packet_to_tx.check_info.check_info_full=0b00000001;
+                        data_packet_to_tx.data=0xFF;
+                        data_packet_to_tx.checksum=crc32(data_packet_to_tx.data<<8 | data_packet_to_tx.check_info.check_info_full);
                         to_hold_recently_sent_packet=data_packet_to_tx;
                         push_to_uart_tx_fifo(&data_packet_to_tx);
-                        xSemaphoreGive(xMutex);
+                    xSemaphoreGive(xMutex);
                 }
                 break;
-            case 0b00000001:
+            case STATE_PREVIOUS_MESSAGE_NOT_CORRUPTED:  //can do nothing: slave can do nothing
                 break;
-            case 0b00000010:
+            case STATE_NEW_MESSAGE_CORRUPTED_BY_RECEIVER_ONLY:
                 break;
-            case 0b00000011:
+            case STATE_PREVIOUS_MESSAGE_CORRUPTED_BY_RECEIVER_ONLY:
                 xSemaphoreTake(xMutex,portMAX_DELAY);
                 push_to_uart_tx_fifo(&to_hold_recently_sent_packet);
                 xSemaphoreGive(xMutex);
                 break;
-            case 0b00000100:
+            case STATE_NEW_MESSAGE_CORRUPTED_BY_SENDER_ONLY:
                 xSemaphoreTake(xMutex,portMAX_DELAY);
-                data_packet_to_tx.byte_0.full_8_bits=0x00000011;
-                data_packet_to_tx.byte_1=0xFF;
-                data_packet_to_tx.byte_2_5=crc32(data_packet_to_tx.byte_1);
+                data_packet_to_tx.check_info.check_info_full=0b00000011;
+                data_packet_to_tx.data=0xFF;
+                data_packet_to_tx.checksum=crc32(data_packet_to_tx.data<<8 | data_packet_to_tx.check_info.check_info_full);
                 push_to_uart_tx_fifo(&data_packet_to_tx);
                 xSemaphoreGive(xMutex);
                 break;
-            case 0b00000101:
+            case STATE_PREVIOUS_MESSAGE_CORRUPTED_BY_SENDER_ONLY:
                 xSemaphoreTake(xMutex,portMAX_DELAY);
-                data_packet_to_tx.byte_0.full_8_bits=0x00000011;
-                data_packet_to_tx.byte_1=0xFF;
-                data_packet_to_tx.byte_2_5=crc32(data_packet_to_tx.byte_1);
+                data_packet_to_tx.check_info.check_info_full=0b00000011;
+                data_packet_to_tx.data=0xFF;
+                data_packet_to_tx.checksum=crc32(data_packet_to_tx.data<<8 | data_packet_to_tx.check_info.check_info_full);
                 push_to_uart_tx_fifo(&data_packet_to_tx);
                 xSemaphoreGive(xMutex);
                 break;
-            case 0b00000110:
+            case STATE_NEW_MESSAGE_CORRUPTED_BY_SENDER_CORRUPTED_BY_RECEIVER:
                 xSemaphoreTake(xMutex,portMAX_DELAY);
-                data_packet_to_tx.byte_0.full_8_bits=0x00000011;
-                data_packet_to_tx.byte_1=0xFF;
-                data_packet_to_tx.byte_2_5=crc32(data_packet_to_tx.byte_1);
+                data_packet_to_tx.check_info.check_info_full=0b00000011;
+                data_packet_to_tx.data=0xFF;
+                data_packet_to_tx.checksum=crc32(data_packet_to_tx.data<<8 | data_packet_to_tx.check_info.check_info_full);
                 push_to_uart_tx_fifo(&data_packet_to_tx);
                 xSemaphoreGive(xMutex);
                 break;
-            case 0b00000111:
+            case STATE_PREVIOUS_MESSAGE_CORRUPTED_BY_SENDER_CORRUPTED_BY_RECEIVER:
                 xSemaphoreTake(xMutex,portMAX_DELAY);
-                data_packet_to_tx.byte_0.full_8_bits=0x00000011;
-                data_packet_to_tx.byte_1=0xFF;
-                data_packet_to_tx.byte_2_5=crc32(data_packet_to_tx.byte_1);
+                data_packet_to_tx.check_info.check_info_full=0b00000011;
+                data_packet_to_tx.data=0xFF;
+                data_packet_to_tx.checksum=crc32(data_packet_to_tx.data<<8 | data_packet_to_tx.check_info.check_info_full);
                 push_to_uart_tx_fifo(&data_packet_to_tx);
                 xSemaphoreGive(xMutex);
                 break;
