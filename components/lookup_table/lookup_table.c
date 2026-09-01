@@ -88,10 +88,10 @@ static void function_to_handle_display(char* message) {
     oled_screen_print(message);
 }
 void to_hand_control_to_oled(StructForDisplay* chosen_struct) {
-    if (!chosen_struct) {
+    /*if (!chosen_struct) {
         printf("Pointer for StructForDisplay doesn't exist!\n");
         fflush(stdout);
         return;
-    }
+    }*/
     chosen_struct->function(chosen_struct->message);
 }
