@@ -8,17 +8,18 @@ typedef struct {
 }Queue_Struct_UART;
 typedef struct {
     union {
-        uint8_t full_8_bits;
+        uint8_t check_info_full;
         struct __attribute__((packed)) {
-            uint8_t bit0: 1;
-            uint8_t bit1: 1;
-            uint8_t bit2: 1;
-            uint8_t bit3: 1;
-            uint8_t msbs: 4;
+            uint8_t is_message_previous:1;
+            uint8_t is_corrupted_by_receiver:1;
+            uint8_t is_corrupted_by_sender:1;
+            uint8_t is_data_valid:1;
+            uint8_t is_done_processing:1;
+            uint8_t node_number:3;
         };
-    }byte_0;
-    uint8_t byte_1;
-    uint32_t byte_2_5;
+    }check_info;
+    uint8_t data;
+    uint32_t checksum;
 } __attribute__((packed)) RS485_Packet;
 extern RS485_Packet data_packet_from_rx;
 extern RS485_Packet data_packet_to_tx;
